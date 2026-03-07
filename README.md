@@ -1,14 +1,14 @@
 # Debate Prep
 
-An agentic debate practice app powered by Claude and LangGraph. Practice your argumentation against an AI opponent, or watch two AIs debate each other — with a judge agent scoring every round.
+An agentic debate practice app powered by Claude and LangGraph. Practice your argumentation against an AI opponent, or watch two AIs debate each other with a judge agent scoring every round.
 
 ## How It Works
 
 A **LangGraph** state machine orchestrates three Claude-powered agents:
 
-- **For Agent** — argues in favor of the topic
-- **Against Agent** — argues against the topic
-- **Judge Agent** — scores each round across four criteria: Argument Quality (40%), Responsiveness (30%), Impact Analysis (20%), and Debate Skill (10%)
+- **For Agent** : argues in favor of the topic
+- **Against Agent** : argues against the topic
+- **Judge Agent** : scores each round across four criteria: Argument Quality (40%), Responsiveness (30%), Impact Analysis (20%), and Debate Skill (10%)
 
 Two modes are supported:
 
