@@ -1,0 +1,37 @@
+import anthropic
+from .state import DebateState
+from .prompts import FOR_SYSTEM_PROMPT, build_opponent_context
+from core.config import get_settings
+
+
+async def for_agent_node(state: DebateState) -> dict:
+    """Streams the FOR argument token by token, returns state update."""
+    settings = get_settings()
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    callback = state.get("stream_callback")
+
+    opponent_context = build_opponent_context(state["history"], side="for")
+    system_prompt = FOR_SYSTEM_PROMPT.format(
+        topic=state["topic"],
+        current_round=state["current_round"],
+        total_rounds=state["total_rounds"],
+        opponent_context=opponent_context,
+    )
+
+    full_text = ""
+
+    async with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=settings.max_argument_tokens,
+        system=system_prompt,
+        messages=[{"role": "user", "content": "Present your argument."}],
+    ) as stream:
+        async for text in stream.text_stream:
+            full_text += text
+            if callback:
+                await callback("token_for", text)
+
+    if callback:
+        await callback("argument_for_complete", "")
+
+    return {"argument_for": full_text}
