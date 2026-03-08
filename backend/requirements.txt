@@ -1,12 +1,10 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 sqlalchemy[asyncio]==2.0.35
-asyncpg==0.29.0
-langgraph==0.2.28
+aiosqlite
 anthropic>=0.40.0
 pydantic==2.12.5
 pydantic-settings==2.5.2
 python-dotenv==1.2.1
 python-multipart==0.0.9
-alembic==1.13.3
 websockets==13.1

@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, Callable, Any
+from typing import TypedDict, Optional
 
 
 class DebateState(TypedDict):
@@ -31,10 +31,5 @@ class DebateState(TypedDict):
 
     # Control flow
     awaiting_user_input: bool
-    user_argument: Optional[str]     # Injected via WebSocket handler
     is_complete: bool
 
-    # Runtime-only: NOT serialized by LangGraph checkpointer.
-    # Injected by the WebSocket handler each time the graph is invoked.
-    # Signature: async (event_type: str, data: str) -> None
-    stream_callback: Optional[Any]

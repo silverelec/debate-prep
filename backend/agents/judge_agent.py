@@ -2,6 +2,7 @@ import anthropic
 import json
 from .state import DebateState
 from .prompts import JUDGE_SYSTEM_PROMPT, build_history_context
+from . import callback_registry
 from core.config import get_settings
 
 
@@ -19,7 +20,7 @@ async def judge_node(state: DebateState) -> dict:
     """Calls Claude to score both debaters, streams feedback, returns state update."""
     settings = get_settings()
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    callback = state.get("stream_callback")
+    callback = callback_registry.get(state["session_id"])
 
     history_context = build_history_context(state["history"])
     system_prompt = JUDGE_SYSTEM_PROMPT.format(

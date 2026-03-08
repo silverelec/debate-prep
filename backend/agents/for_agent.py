@@ -1,6 +1,7 @@
 import anthropic
 from .state import DebateState
 from .prompts import FOR_SYSTEM_PROMPT, build_opponent_context
+from . import callback_registry
 from core.config import get_settings
 
 
@@ -8,7 +9,7 @@ async def for_agent_node(state: DebateState) -> dict:
     """Streams the FOR argument token by token, returns state update."""
     settings = get_settings()
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    callback = state.get("stream_callback")
+    callback = callback_registry.get(state["session_id"])
 
     opponent_context = build_opponent_context(state["history"], side="for")
     system_prompt = FOR_SYSTEM_PROMPT.format(

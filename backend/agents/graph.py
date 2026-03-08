@@ -1,16 +1,16 @@
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+import json
 from .state import DebateState
 from .for_agent import for_agent_node
 from .against_agent import against_agent_node
 from .judge_agent import judge_node
+from . import callback_registry, input_registry
 
 
 # ---------------------------------------------------------------------------
 # Helper nodes
 # ---------------------------------------------------------------------------
 
-async def initialize_round_node(state: DebateState) -> dict:
+async def initialize_round_node(state: dict) -> dict:
     """Increment round counter, reset per-round fields."""
     return {
         "current_round": state["current_round"] + 1,
@@ -19,34 +19,42 @@ async def initialize_round_node(state: DebateState) -> dict:
         "round_score_for": None,
         "round_score_against": None,
         "awaiting_user_input": False,
-        "user_argument": None,
-        "current_round_id": "",  # Will be set by persist_round after DB insert
+        "current_round_id": "",
     }
 
 
-async def human_argument_node(state: DebateState) -> dict:
+async def human_argument_node(state: dict) -> dict:
     """
-    Placeholder that LangGraph interrupts before (interrupt_before=["human_argument"]).
-    When resumed, user_argument has been injected into state.
-    Assigns the user's text to the correct side.
+    Signals the frontend it's the user's turn, then waits for the user's
+    argument to arrive via the input_registry queue (injected from WebSocket).
     """
-    user_arg = state.get("user_argument", "")
-    user_pos = state.get("user_position", "for")
-    if user_pos == "for":
-        return {"argument_for": user_arg, "awaiting_user_input": False}
+    session_id = state["session_id"]
+
+    callback = callback_registry.get(session_id)
+    if callback:
+        await callback("user_turn", json.dumps({
+            "round": state["current_round"],
+            "position": state["user_position"],
+        }))
+
+    queue = input_registry.get(session_id)
+    user_text = await queue.get()
+
+    if state["user_position"] == "for":
+        return {"argument_for": user_text, "awaiting_user_input": False}
     else:
-        return {"argument_against": user_arg, "awaiting_user_input": False}
+        return {"argument_against": user_text, "awaiting_user_input": False}
 
 
-async def persist_round_node(state: DebateState) -> dict:
-    """Persist completed round data to DB. Imported lazily to avoid circular imports."""
+async def persist_round_node(state: dict) -> dict:
+    """Persist completed round data to DB."""
     from services.debate_service import persist_round
     round_id = await persist_round(state)
     return {"current_round_id": str(round_id)}
 
 
-async def check_completion_node(state: DebateState) -> dict:
-    """Update history with completed round."""
+async def check_completion_node(state: dict) -> dict:
+    """Update history with completed round and check if debate is done."""
     updated_history = list(state["history"]) + [{
         "round": state["current_round"],
         "for": state["argument_for"] or "",
@@ -56,7 +64,7 @@ async def check_completion_node(state: DebateState) -> dict:
     return {"history": updated_history, "is_complete": is_complete}
 
 
-async def finalize_debate_node(state: DebateState) -> dict:
+async def finalize_debate_node(state: dict) -> dict:
     """Determine winner and persist final session state."""
     from services.debate_service import finalize_session
 
@@ -77,9 +85,8 @@ async def finalize_debate_node(state: DebateState) -> dict:
         final_score_against=round(score_against, 2),
     )
 
-    callback = state.get("stream_callback")
+    callback = callback_registry.get(state["session_id"])
     if callback:
-        import json
         await callback("debate_complete", json.dumps({
             "winner": winner,
             "final_score_for": round(score_for, 2),
@@ -90,95 +97,34 @@ async def finalize_debate_node(state: DebateState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Routing functions
+# Main debate runner — calls node functions directly, no LangGraph executor
 # ---------------------------------------------------------------------------
 
-def route_after_initialize(state: DebateState) -> str:
-    if state["mode"] == "ai_vs_ai":
-        return "ai_for_argument"
-    # user_vs_ai
-    if state["user_position"] == "for":
-        return "human_argument"  # User argues FOR first
-    else:
-        return "ai_for_argument"  # AI argues FOR, then user argues AGAINST
+async def run_debate(state: dict) -> None:
+    """
+    Execute a full debate by calling node functions directly.
+    Avoids LangGraph's execution engine and its internal msgpack serialization,
+    which was raising "Object of type function is not serializable".
+    All real-time streaming goes through callback_registry, not LangGraph streaming.
+    """
+    while True:
+        state.update(await initialize_round_node(state))
 
+        if state["mode"] == "ai_vs_ai":
+            state.update(await for_agent_node(state))
+            state.update(await against_agent_node(state))
+        elif state["user_position"] == "for":
+            state.update(await human_argument_node(state))   # signals UI, awaits queue
+            state.update(await against_agent_node(state))
+        else:  # user_position == "against"
+            state.update(await for_agent_node(state))
+            state.update(await human_argument_node(state))   # signals UI, awaits queue
 
-def route_after_for(state: DebateState) -> str:
-    if state["mode"] == "ai_vs_ai":
-        return "ai_against_argument"
-    # user_vs_ai, user_position == "against"
-    return "human_argument"
+        state.update(await judge_node(state))
+        state.update(await persist_round_node(state))
+        state.update(await check_completion_node(state))
 
+        if state["is_complete"]:
+            break
 
-def route_after_human(state: DebateState) -> str:
-    if state["user_position"] == "for":
-        return "ai_against_argument"  # User was FOR, now AI argues AGAINST
-    else:
-        return "judge"  # User was AGAINST (after AI was FOR), now judge
-
-
-def route_after_check(state: DebateState) -> str:
-    if state["is_complete"]:
-        return "finalize_debate"
-    return "initialize_round"
-
-
-# ---------------------------------------------------------------------------
-# Graph assembly
-# ---------------------------------------------------------------------------
-
-def build_graph() -> StateGraph:
-    builder = StateGraph(DebateState)
-
-    builder.add_node("initialize_round", initialize_round_node)
-    builder.add_node("ai_for_argument", for_agent_node)
-    builder.add_node("ai_against_argument", against_agent_node)
-    builder.add_node("human_argument", human_argument_node)
-    builder.add_node("judge", judge_node)
-    builder.add_node("persist_round", persist_round_node)
-    builder.add_node("check_completion", check_completion_node)
-    builder.add_node("finalize_debate", finalize_debate_node)
-
-    builder.add_edge(START, "initialize_round")
-
-    builder.add_conditional_edges(
-        "initialize_round",
-        route_after_initialize,
-        {"ai_for_argument": "ai_for_argument", "human_argument": "human_argument"},
-    )
-
-    builder.add_conditional_edges(
-        "ai_for_argument",
-        route_after_for,
-        {"ai_against_argument": "ai_against_argument", "human_argument": "human_argument"},
-    )
-
-    builder.add_edge("ai_against_argument", "judge")
-
-    builder.add_conditional_edges(
-        "human_argument",
-        route_after_human,
-        {"ai_against_argument": "ai_against_argument", "judge": "judge"},
-    )
-
-    builder.add_edge("judge", "persist_round")
-    builder.add_edge("persist_round", "check_completion")
-
-    builder.add_conditional_edges(
-        "check_completion",
-        route_after_check,
-        {"initialize_round": "initialize_round", "finalize_debate": "finalize_debate"},
-    )
-
-    builder.add_edge("finalize_debate", END)
-
-    return builder
-
-
-# Compile once at import time — shared across all sessions
-# interrupt_before=["human_argument"] pauses the graph at the human turn
-checkpointer = MemorySaver()
-compiled_graph = build_graph().compile(
-    checkpointer=checkpointer,
-    interrupt_before=["human_argument"],
-)
+    await finalize_debate_node(state)

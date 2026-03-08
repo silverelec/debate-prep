@@ -1,7 +1,6 @@
 import uuid
-from sqlalchemy import Float, ForeignKey, Enum as SAEnum, Text
+from sqlalchemy import Float, ForeignKey, Enum as SAEnum, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from core.database import Base
 
 
@@ -9,16 +8,16 @@ class RoundScore(Base):
     __tablename__ = "round_scores"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     round_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("debate_rounds.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("debate_rounds.id", ondelete="CASCADE"), nullable=False
     )
     session_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("debate_sessions.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("debate_sessions.id", ondelete="CASCADE"), nullable=False
     )
     scored_position: Mapped[str] = mapped_column(
-        SAEnum("for", "against", name="scored_position"), nullable=False
+        SAEnum("for", "against", name="scored_position", native_enum=False), nullable=False
     )
     argument_quality: Mapped[float] = mapped_column(Float, nullable=False)
     responsiveness: Mapped[float] = mapped_column(Float, nullable=False)

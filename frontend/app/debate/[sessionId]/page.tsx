@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { getSession } from "@/lib/api";
 import { Session } from "@/lib/types";
 import { useDebateSocket } from "@/hooks/useDebateSocket";
+import { formatScore } from "@/lib/utils";
 import { TopicBanner } from "@/components/debate/TopicBanner";
 import { RoundHeader } from "@/components/debate/RoundHeader";
 import { ArgumentCard } from "@/components/debate/ArgumentCard";
@@ -80,6 +81,10 @@ export default function DebateRoomPage() {
     .map((r) => r.scores)
     .filter(Boolean) as NonNullable<(typeof completedRounds)[0]["scores"]>[];
 
+  // Mobile head-to-head bar percentage
+  const total = cumulativeFor + cumulativeAgainst;
+  const forPct = total > 0 ? (cumulativeFor / total) * 100 : 50;
+
   return (
     <div className="max-w-5xl mx-auto">
       <TopicBanner
@@ -102,6 +107,28 @@ export default function DebateRoomPage() {
           {wsError}
         </div>
       )}
+
+      {/* Mobile score strip (visible on < lg) */}
+      <div className="lg:hidden mb-4 flex items-center gap-3 bg-white rounded-xl border border-gray-200 px-4 py-3">
+        <div className="text-center min-w-[48px]">
+          <p className="text-lg font-bold text-blue-600 leading-none">
+            {formatScore(cumulativeFor)}
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">FOR</p>
+        </div>
+        <div className="flex-1 h-2 bg-red-200 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-blue-500 rounded-full transition-all duration-700"
+            style={{ width: `${forPct}%` }}
+          />
+        </div>
+        <div className="text-center min-w-[48px]">
+          <p className="text-lg font-bold text-red-600 leading-none">
+            {formatScore(cumulativeAgainst)}
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">AGN</p>
+        </div>
+      </div>
 
       <div className="flex gap-6">
         {/* Main debate feed */}
@@ -156,6 +183,7 @@ export default function DebateRoomPage() {
               <RoundHeader
                 roundNumber={activeRoundNumber}
                 totalRounds={session.total_rounds}
+                isActive
               />
               <div className="space-y-3">
                 {streamingFor && (
@@ -192,8 +220,8 @@ export default function DebateRoomPage() {
           )}
         </div>
 
-        {/* Score sidebar */}
-        <div className="w-56 flex-shrink-0">
+        {/* Score sidebar — desktop only */}
+        <div className="hidden lg:block w-56 flex-shrink-0">
           <ScorePanel
             cumulativeFor={cumulativeFor}
             cumulativeAgainst={cumulativeAgainst}

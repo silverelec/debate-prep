@@ -48,13 +48,14 @@ function SetupForm() {
   return (
     <div className="max-w-2xl mx-auto py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">
-          {mode === "user_vs_ai" ? "User vs AI Debate" : "AI vs AI Debate"}
-        </h1>
-        <p className="text-gray-500 text-sm mt-1">Configure your debate session</p>
+        <p className="text-xs font-semibold tracking-[0.15em] text-indigo-500 uppercase mb-2">
+          {mode === "user_vs_ai" ? "User vs AI" : "AI vs AI"}
+        </p>
+        <h1 className="text-2xl font-bold text-gray-900">Configure your debate</h1>
+        <p className="text-gray-400 text-sm mt-1">Choose a topic, set your position, and start.</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6 bg-white rounded-xl border border-gray-200 p-6">
+      <form onSubmit={handleSubmit} className="space-y-6 bg-white rounded-xl border border-gray-200 shadow-md p-6">
         {/* Topic */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">

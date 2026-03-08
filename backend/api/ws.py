@@ -16,44 +16,44 @@ Event protocol (server → client):
 Event protocol (client → server):
   { "type": "user_argument", "data": "<text>" }
 """
+import asyncio
 import json
+import traceback
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from agents.graph import compiled_graph
+from agents.graph import run_debate
 from agents.state import DebateState
+from agents import callback_registry, input_registry
 from services.debate_service import get_session, mark_session_in_progress
 
 router = APIRouter(tags=["websocket"])
 
 
-def build_initial_state(session, callback) -> DebateState:
-    return DebateState(
-        session_id=str(session.id),
-        topic=session.topic,
-        mode=session.mode,
-        total_rounds=session.total_rounds,
-        user_position=session.user_position,
-        current_round=0,
-        current_round_id="",
-        argument_for=None,
-        argument_against=None,
-        history=[],
-        cumulative_score_for=0.0,
-        cumulative_score_against=0.0,
-        round_score_for=None,
-        round_score_against=None,
-        awaiting_user_input=False,
-        user_argument=None,
-        is_complete=False,
-        stream_callback=callback,
-    )
+def build_initial_state(session) -> dict:
+    return {
+        "session_id": str(session.id),
+        "topic": session.topic,
+        "mode": session.mode,
+        "total_rounds": session.total_rounds,
+        "user_position": session.user_position,
+        "current_round": 0,
+        "current_round_id": "",
+        "argument_for": None,
+        "argument_against": None,
+        "history": [],
+        "cumulative_score_for": 0.0,
+        "cumulative_score_against": 0.0,
+        "round_score_for": None,
+        "round_score_against": None,
+        "awaiting_user_input": False,
+        "is_complete": False,
+    }
 
 
 @router.websocket("/ws/debate/{session_id}")
 async def debate_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
 
-    # Load session
     session = await get_session(session_id)
     if not session:
         await websocket.send_json({"type": "error", "data": "Session not found"})
@@ -67,7 +67,6 @@ async def debate_websocket(websocket: WebSocket, session_id: str):
 
     await mark_session_in_progress(session_id)
 
-    # Build async stream_callback that pushes events over the WebSocket
     async def stream_callback(event_type: str, data: str):
         try:
             await websocket.send_json({
@@ -76,96 +75,71 @@ async def debate_websocket(websocket: WebSocket, session_id: str):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         except Exception:
-            pass  # WebSocket may be closed; ignore send errors
+            pass
 
-    config = {"configurable": {"thread_id": session_id}}
-    initial_state = build_initial_state(session, stream_callback)
+    initial_state = build_initial_state(session)
+    callback_registry.register(session_id, stream_callback)
 
     try:
         if session.mode == "ai_vs_ai":
-            await _run_ai_vs_ai(websocket, initial_state, config, stream_callback)
+            await _run_ai_vs_ai(initial_state)
         else:
-            await _run_user_vs_ai(websocket, session, initial_state, config, stream_callback)
+            await _run_user_vs_ai(websocket, session, initial_state)
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        print(f"[debate_websocket] ERROR:\n{traceback.format_exc()}")
         try:
             await websocket.send_json({"type": "error", "data": str(e)})
         except Exception:
             pass
     finally:
+        callback_registry.unregister(session_id)
         try:
             await websocket.close()
         except Exception:
             pass
 
 
-async def _run_ai_vs_ai(websocket, initial_state, config, stream_callback):
+async def _run_ai_vs_ai(initial_state: dict):
     """Run full AI vs AI debate to completion."""
-    async for _ in compiled_graph.astream(initial_state, config=config, stream_mode="updates"):
-        pass  # All streaming happens via stream_callback inside nodes
+    await run_debate(initial_state)
 
 
-async def _run_user_vs_ai(websocket, session, initial_state, config, stream_callback):
+async def _run_user_vs_ai(websocket: WebSocket, session, initial_state: dict):
     """
-    Interleave graph execution with user input via WebSocket.
-    Graph pauses at human_argument node (interrupt_before), waits for user input,
-    then resumes.
+    Run the debate as a background task while concurrently listening for user
+    arguments over the WebSocket. human_argument_node signals the frontend and
+    waits on an asyncio.Queue; this handler puts user input into that queue.
     """
-    # Run graph until first interrupt (user's first turn)
-    async for _ in compiled_graph.astream(initial_state, config=config, stream_mode="updates"):
-        pass
+    session_id = str(session.id)
+    input_queue = input_registry.register(session_id)
 
-    while True:
-        # Check if debate is already complete
-        graph_state = await compiled_graph.aget_state(config)
-        if graph_state.values.get("is_complete"):
-            break
+    async def run_graph():
+        await run_debate(initial_state)
 
-        # Check if we're actually interrupted (waiting for human input)
-        # If not interrupted, the loop should naturally end
-        if not graph_state.next:
-            break
+    async def forward_user_input():
+        while True:
+            try:
+                raw = await websocket.receive_text()
+                msg = json.loads(raw)
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                continue
 
-        # Signal frontend: user's turn to input
-        await websocket.send_json({
-            "type": "user_turn",
-            "data": json.dumps({
-                "round": graph_state.values.get("current_round"),
-                "position": session.user_position,
-            }),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+            if msg.get("type") != "user_argument":
+                continue
+            user_text = msg.get("data", "").strip()
+            if user_text:
+                await input_queue.put(user_text)
 
-        # Wait for user's argument message
-        try:
-            raw = await websocket.receive_text()
-            msg = json.loads(raw)
-        except Exception as e:
-            await websocket.send_json({"type": "error", "data": f"Invalid message: {e}"})
-            continue
+    graph_task = asyncio.create_task(run_graph())
+    input_task = asyncio.create_task(forward_user_input())
 
-        if msg.get("type") != "user_argument":
-            await websocket.send_json({"type": "error", "data": "Expected user_argument message"})
-            continue
-
-        user_text = msg.get("data", "").strip()
-        if not user_text:
-            await websocket.send_json({"type": "error", "data": "Argument cannot be empty"})
-            continue
-
-        # Inject user argument into the graph state and resume
-        await compiled_graph.aupdate_state(
-            config,
-            {"user_argument": user_text, "stream_callback": stream_callback},
-            as_node="human_argument",
-        )
-
-        async for _ in compiled_graph.astream(None, config=config, stream_mode="updates"):
-            pass
-
-        # Check completion after this round
-        graph_state = await compiled_graph.aget_state(config)
-        if graph_state.values.get("is_complete"):
-            break
+    try:
+        await graph_task
+    finally:
+        input_task.cancel()
+        input_registry.unregister(session_id)

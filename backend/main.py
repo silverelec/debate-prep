@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import get_settings
+from core.database import engine, Base
+import models  # noqa: F401 — registers all ORM models with Base
 from api.sessions import router as sessions_router
 from api.topics import router as topics_router
 from api.ws import router as ws_router
@@ -15,7 +17,8 @@ from api.ws import router as ws_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Nothing to initialize at startup (graph compiled at import time)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
 
 
