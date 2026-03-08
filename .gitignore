@@ -38,3 +38,9 @@ backend/alembic/versions/*.pyc
 # IDE
 .vscode/settings.json
 .idea/
+
+# Runtime database (generated when app runs, environment-specific)
+debate.db
+
+# Claude Code internal workspace metadata (local tool state, not app source)
+.claude/
