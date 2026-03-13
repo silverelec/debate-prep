@@ -41,7 +41,7 @@ workflows/      # Markdown SOPs defining what to do and how
 credentials.json, token.json  # Google OAuth (gitignored)
 ```
 
-**Core principle:** Local files are just for processing. Anything I need to see or use lives in cloud services. Everything in `.tmp/` is disposable.
+**Core principle:** Local files are just for processing. Anything I need to see or use lives in cloud services. Everything in `.tmp/` is disposable. Don't add Co-Authored-By attribution to commits on this project.
 
 ## Bottom Line
 
